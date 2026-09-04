@@ -30,4 +30,4 @@ ENV HARMONY_DATA_DIR=/data
 
 EXPOSE 8000
 
-CMD ["deno", "task", "server"]
+CMD ["sh", "-c", "DENO_DEPLOYMENT_ID=v2026.8.30 deno run -A server/main.ts"]

@@ -1,7 +1,7 @@
 const http = require("http");
 const { spawn } = require("child_process");
 
-const DASHBOARD_URL = "http://dashboard:8080";
+const DASHBOARD_URL = process.env.DASHBOARD_URL || "http://dashboard:8080";
 const POLL_INTERVAL_MS = 5000;
 const UPLOADER_PATH = "/app/upload-cover-art.js";
 
