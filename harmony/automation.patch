@@ -1,0 +1,151 @@
+diff --git a/config.ts b/config.ts
+index 71fae96..caa8c11 100644
+--- a/config.ts
++++ b/config.ts
+@@ -13,6 +13,12 @@ export const musicbrainzApiBaseUrl = getUrlFromEnv('HARMONY_MB_API_URL', 'https:
+ /** Base URL of the MusicBrainz server which should be targeted (by links and for seeding). */
+ export const musicbrainzTargetServer = getUrlFromEnv('HARMONY_MB_TARGET_URL', 'https://musicbrainz.org/');
+ 
++/** Internal URL of the MusicBrainz automation dashboard. */
++export const automationDashboardUrl = getUrlFromEnv(
++        'HARMONY_AUTOMATION_DASHBOARD_URL',
++        'http://dashboard:8080',
++);
++
+ /** Current git revision of the app. */
+ export const revision = getFromEnv('DENO_DEPLOYMENT_ID');
+ 
+diff --git a/musicbrainz/seeding.ts b/musicbrainz/seeding.ts
+index 6636929..5298483 100644
+--- a/musicbrainz/seeding.ts
++++ b/musicbrainz/seeding.ts
+@@ -1,4 +1,4 @@
+-import { createReleasePermalink, encodeReleaseLookupState } from '@/server/permalink.ts';
++import { encodeReleaseLookupState } from '@/server/permalink.ts';
+ import { type AnnotationIncludes, buildAnnotation } from './annotation.ts';
+ import { determineReleaseEventCountries } from './release_countries.ts';
+ import { urlTypeIds } from './type_id.ts';
+@@ -166,9 +166,7 @@ function buildEditNote(info: ReleaseInfo, options: ReleaseSeedOptions): string {
+ 		return line;
+ 	});
+ 
+-	const { projectUrl, seederUrl } = options;
+-	const sourceUrl = seederUrl ? createReleasePermalink(info, seederUrl) : projectUrl;
+-	lines.unshift(`${options.isUpdate ? 'Updated' : 'Imported'} with Harmony (${sourceUrl}), using data from:`);
++	lines.unshift(`${options.isUpdate ? 'Updated' : 'Imported'} with Harmony, using data from:`);
+ 
+ 	return lines.join('\n');
+ }
+diff --git a/server/routes/release/actions.tsx b/server/routes/release/actions.tsx
+index f75d958..3bdfe5b 100644
+--- a/server/routes/release/actions.tsx
++++ b/server/routes/release/actions.tsx
+@@ -7,7 +7,7 @@ import { ErrorMessageBox, MessageBox } from '@/server/components/MessageBox.tsx'
+ import { ProviderList } from '@/server/components/ProviderList.tsx';
+ import { SpriteIcon } from '@/server/components/SpriteIcon.tsx';
+ 
+-import { musicbrainzTargetServer } from '@/config.ts';
++import { automationDashboardUrl, musicbrainzTargetServer } from '@/config.ts';
+ import { deduplicateEntities } from '@/harmonizer/deduplicate.ts';
+ import type {
+ 	ArtistCreditName,
+@@ -33,6 +33,71 @@ import { getLogger } from 'std/log/get_logger.ts';
+ import { join } from 'std/url/join.ts';
+ import type { EntityWithUrlRels } from '@/musicbrainz/edit_link.ts';
+ 
++async function notifyAutomationDashboard(
++        req: Request,
++        releaseMbid: string,
++        deezer: string | null,
++        gtin: string | null,
++): Promise<void> {
++        try {
++                const response = await fetch(automationDashboardUrl, {
++                        method: 'POST',
++                        headers: {
++                                'Content-Type': 'application/json',
++                        },
++                        body: JSON.stringify({
++                                release_mbid: releaseMbid,
++                                deezer,
++                                gtin,
++                        }),
++                });
++
++                if (!response.ok) {
++                        console.warn(
++                                `Automation dashboard notification failed: HTTP ${response.status}`,
++                        );
++                }
++        } catch (error) {
++                console.warn(
++                        'Automation dashboard notification failed:',
++                        error,
++                );
++        }
++}
++
++async function notifyAutomationDashboardArtwork(
++        releaseMbid: string,
++        deezer: string | null,
++        gtin: string | null,
++        artwork: Artwork[],
++): Promise<void> {
++        try {
++                const response = await fetch(automationDashboardUrl, {
++                        method: 'POST',
++                        headers: {
++                                'Content-Type': 'application/json',
++                        },
++                        body: JSON.stringify({
++                                release_mbid: releaseMbid,
++                                deezer,
++                                gtin,
++                                artwork,
++                        }),
++                });
++
++                if (!response.ok) {
++                        console.warn(
++                                `Automation dashboard artwork notification failed: HTTP ${response.status}`,
++                        );
++                }
++        } catch (error) {
++                console.warn(
++                        'Automation dashboard artwork notification failed:',
++                        error,
++                );
++        }
++}
++
+ export default defineRoute(async (req, ctx) => {
+ 	const errors: Error[] = [];
+ 	let release: MergedHarmonyRelease | undefined = undefined;
+@@ -49,6 +114,13 @@ export default defineRoute(async (req, ctx) => {
+ 		releaseMbid = ctx.url.searchParams.get('release_mbid') ?? undefined;
+ 		if (releaseMbid) {
+ 			releaseMbid = extractMBID(releaseMbid, ['release']);
++
++			await notifyAutomationDashboard(
++				req,
++				releaseMbid,
++				ctx.url.searchParams.get('deezer'),
++				ctx.url.searchParams.get('gtin'),
++			);
+ 			releaseUrl = join(musicbrainzTargetServer, 'release', releaseMbid);
+ 
+ 			const {
+@@ -97,6 +169,13 @@ export default defineRoute(async (req, ctx) => {
+ 				release.images?.map((image) => ({ ...image, provider })) ?? []
+ 			);
+ 
++                    await notifyAutomationDashboardArtwork(
++                            releaseMbid,
++                            ctx.url.searchParams.get('deezer'),
++                            ctx.url.searchParams.get('gtin'),
++                            allImages,
++                    );
++
+ 			const allTracks = release.media.flatMap((medium) => medium.tracklist);
+ 
+ 			// Fallback to track title, Harmony recordings are usually unnamed.

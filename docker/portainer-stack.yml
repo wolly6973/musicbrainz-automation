@@ -1,0 +1,63 @@
+services:
+
+  musicbrainz-browser:
+    image: mcr.microsoft.com/playwright:v1.55.0-noble
+    container_name: musicbrainz-browser
+    restart: unless-stopped
+    command: ["/app/start-browser.sh"]
+    environment:
+      DASHBOARD_BROWSER_URL: ${DASHBOARD_BROWSER_URL}
+    volumes:
+      - /root/mb-automation-docker/musicbrainz-browser:/ms-playwright-profile
+      - /root/mb-automation-docker/musicbrainz-browser/app:/app
+      - /root/mb-automation-docker/musicbrainz-browser/x11:/tmp/.X11-unix
+    networks:
+      - mb-automation
+
+  musicbrainz-vnc:
+    image: mb-browser-vnc:latest
+    container_name: musicbrainz-vnc
+    restart: unless-stopped
+    ports:
+      - "6080:6080"
+    volumes:
+      - /root/mb-automation-docker/musicbrainz-browser/x11:/tmp/.X11-unix
+    networks:
+      - mb-automation
+
+  harmony:
+    image: mb-harmony:test
+    container_name: mb-harmony
+    restart: unless-stopped
+    environment:
+      PORT: "8000"
+      HARMONY_DATA_DIR: /data
+      HARMONY_TIDAL_CLIENT_ID: ${HARMONY_TIDAL_CLIENT_ID}
+      HARMONY_TIDAL_CLIENT_SECRET: ${HARMONY_TIDAL_CLIENT_SECRET}
+      HARMONY_AUTOMATION_DASHBOARD_URL: "http://dashboard:8080/harmony-release-complete"
+    volumes:
+      - /root/mb-automation-docker/harmony-data:/data
+    ports:
+      - "8001:8000"
+    networks:
+      - mb-automation
+
+  dashboard:
+    image: mb-dashboard:latest
+    container_name: mb-dashboard
+    restart: unless-stopped
+    environment:
+      HARMONY_BROWSER_URL: ${HARMONY_BROWSER_URL}
+      MB_USER_AGENT: ${MB_USER_AGENT}
+    ports:
+      - "8088:8080"
+    volumes:
+      - /root/mb-automation-docker/dashboard:/opt/mb-automation
+    depends_on:
+      - harmony
+    networks:
+      - mb-automation
+
+networks:
+  mb-automation:
+    driver: bridge
