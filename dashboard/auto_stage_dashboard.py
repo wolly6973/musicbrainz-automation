@@ -1023,7 +1023,7 @@ def check_musicbrainz_barcode(
                 response = session.get(
                     url,
                     params=params,
-                    timeout=30
+                    timeout=10
                 )
 
                 if response.status_code == 200:
