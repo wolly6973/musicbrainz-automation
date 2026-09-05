@@ -336,7 +336,7 @@ MB_MAX_RETRIES = 5
 RETRY_STATUS_CODES = {429, 500, 502, 503, 504}
 
 # Persistent import statistics.
-IMPORT_STATS_FILE = "/opt/mb-automation/import_stats.json"
+IMPORT_STATS_FILE = "/data/import_stats.json"
 
 
 # ============================================================

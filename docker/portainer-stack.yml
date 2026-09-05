@@ -1,21 +1,21 @@
 services:
 
   musicbrainz-browser:
-    image: mcr.microsoft.com/playwright:v1.55.0-noble
+    image: ghcr.io/wolly6973/musicbrainz-automation-browser:latest
     container_name: musicbrainz-browser
     restart: unless-stopped
     command: ["/app/start-browser.sh"]
     environment:
+      DASHBOARD_URL: ${DASHBOARD_URL}
       DASHBOARD_BROWSER_URL: ${DASHBOARD_BROWSER_URL}
     volumes:
       - /root/mb-automation-docker/musicbrainz-browser:/ms-playwright-profile
-      - /root/mb-automation-docker/musicbrainz-browser/app:/app
       - /root/mb-automation-docker/musicbrainz-browser/x11:/tmp/.X11-unix
     networks:
       - mb-automation
 
   musicbrainz-vnc:
-    image: mb-browser-vnc:latest
+    image: ghcr.io/wolly6973/musicbrainz-automation-vnc:latest
     container_name: musicbrainz-vnc
     restart: unless-stopped
     ports:
@@ -26,7 +26,7 @@ services:
       - mb-automation
 
   harmony:
-    image: mb-harmony:test
+    image: ghcr.io/wolly6973/musicbrainz-automation-harmony:latest
     container_name: mb-harmony
     restart: unless-stopped
     environment:
@@ -43,7 +43,7 @@ services:
       - mb-automation
 
   dashboard:
-    image: mb-dashboard:latest
+    image: ghcr.io/wolly6973/musicbrainz-automation-dashboard:latest
     container_name: mb-dashboard
     restart: unless-stopped
     environment:
@@ -52,7 +52,7 @@ services:
     ports:
       - "8088:8080"
     volumes:
-      - /root/mb-automation-docker/dashboard:/opt/mb-automation
+      - /root/mb-automation-docker/dashboard-data:/data
     depends_on:
       - harmony
     networks:
