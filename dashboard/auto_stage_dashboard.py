@@ -1141,26 +1141,41 @@ def check_musicbrainz_barcode(
 
         return False
 
-    artist_normalized = normalize_text(
-        artist_name
-    )
-
     title_normalized = normalize_text(
         album_title
     )
 
-    if not artist_normalized or not title_normalized:
+    if not title_normalized:
+
+        return False
+
+    artist_names = [
+        normalize_text(
+            name
+        )
+        for name in re.split(
+            r"\s*&\s*",
+            artist_name
+        )
+    ]
+
+    artist_names = [
+        name
+        for name in artist_names
+        if name
+    ]
+
+    if not artist_names:
 
         return False
 
     fallback_query = (
-        f'artist:"{artist_name}" '
         f'release:"{album_title}"'
     )
 
     add_scan_log(
         "    UPC not found. "
-        "Trying artist/title match..."
+        "Trying album title match..."
     )
 
     fallback_data = musicbrainz_request({
@@ -1168,7 +1183,6 @@ def check_musicbrainz_barcode(
         "fmt": "json",
         "limit": 10
     })
-
     if fallback_data is None:
 
         return None
@@ -1210,7 +1224,7 @@ def check_musicbrainz_barcode(
                 )
             )
 
-            if candidate_artist == artist_normalized:
+            if candidate_artist in artist_names:
 
                 release_artist_match = True
                 break
