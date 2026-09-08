@@ -976,7 +976,7 @@ def check_musicbrainz_barcode(
 
     Matching order:
         1. Exact barcode match
-        2. Artist + album title fallback
+        2. Album title + artist-credit fallback
 
     Returns:
         True  = release found
