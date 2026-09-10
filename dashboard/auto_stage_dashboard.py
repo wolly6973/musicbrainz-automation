@@ -1142,7 +1142,18 @@ def check_musicbrainz_barcode(
         return False
 
     title_normalized = normalize_text(
-        album_title
+    album_title
+    )
+
+    fallback_title = re.sub(
+        r"\s*\((?:feat\.?|featuring)\s+[^)]*\)\s*$",
+        "",
+        album_title,
+        flags=re.IGNORECASE
+    )
+
+    fallback_title_normalized = normalize_text(
+        fallback_title
     )
 
     if not title_normalized:
@@ -1169,8 +1180,15 @@ def check_musicbrainz_barcode(
 
         return False
 
+    search_title = (
+        fallback_title
+        if fallback_title_normalized
+        and fallback_title_normalized != title_normalized
+        else album_title
+    )
+
     fallback_query = (
-        f'release:"{album_title}"'
+        f'release:"{search_title}"'
     )
 
     add_scan_log(
@@ -1201,7 +1219,10 @@ def check_musicbrainz_barcode(
             )
         )
 
-        if release_title != title_normalized:
+        if release_title not in {
+            title_normalized,
+        fallback_title_normalized
+        }:
 
             continue
 
