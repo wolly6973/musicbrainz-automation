@@ -1225,13 +1225,14 @@ def check_musicbrainz_barcode(
     for search_title in unique_search_titles:
 
         fallback_query = (
-            f'release:"{search_title}"'
+            f'artist:"{artist_names[0]}" '
+            f'AND release:"{search_title}"'
         )
 
         fallback_data = musicbrainz_request({
             "query": fallback_query,
             "fmt": "json",
-            "limit": 10
+            "limit": 25
         })
 
         if fallback_data is None:
