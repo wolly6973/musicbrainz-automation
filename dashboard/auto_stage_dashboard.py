@@ -1224,8 +1224,13 @@ def check_musicbrainz_barcode(
 
     for search_title in unique_search_titles:
 
+        artist_query = " OR ".join(
+            f'artist:"{name}"'
+            for name in artist_names
+        )
+
         fallback_query = (
-            f'artist:"{artist_names[0]}" '
+            f'({artist_query}) '
             f'AND release:"{search_title}"'
         )
 
