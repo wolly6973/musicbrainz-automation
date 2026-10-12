@@ -1783,13 +1783,17 @@ HTML = """
             margin-bottom: 20px;
         }
 
-        .scan-output {
+        .scan-panel {
             display: none;
+            margin-bottom: 20px;
+        }
+
+        .scan-output {
+            display: block;
             background: #1a202c;
             color: #e2e8f0;
             padding: 15px;
             border-radius: 6px;
-            margin-bottom: 20px;
             font-family: monospace;
             font-size: 12px;
             line-height: 1.6;
@@ -1800,11 +1804,43 @@ HTML = """
         }
 
         .scan-output-header {
-            color: #90cdf4;
+            color: #2d3748;
             font-family: Arial, sans-serif;
             font-weight: bold;
             margin-bottom: 10px;
+            padding: 8px 0;
+            border-bottom: 1px solid #cbd5e0;
         }
+
+        .modal-backdrop {
+            position: fixed;
+            inset: 0;
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            background: rgba(26, 32, 44, 0.55);
+        }
+
+        .analyze-dialog-card {
+            width: 100%;
+            max-width: 420px;
+            box-sizing: border-box;
+            padding: 24px;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 12px 36px rgba(0, 0, 0, 0.25);
+        }
+
+        .analyze-dialog-card h2 { margin-top: 0; margin-bottom: 8px; }
+        .analyze-dialog-card p { color: #718096; margin-bottom: 18px; }
+        .release-type-option { display: flex; align-items: center; gap: 10px; margin: 14px 0; padding: 10px; background: #f7fafc; border-radius: 5px; cursor: pointer; }
+        .release-type-option input { width: 18px; height: 18px; }
+        .dialog-error { color: #c53030 !important; margin-bottom: 0 !important; }
+        .dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 22px; }
+        .secondary-button { background: #718096; }
+        .secondary-button:hover { background: #4a5568; }
 
         .candidate-grid {
             display: grid;
@@ -2056,47 +2092,40 @@ HTML = """
     </div>
 
 
-    <!-- LIVE SCAN OUTPUT -->
+    <!-- LIVE SCAN CONTROLS AND LOG -->
 
-    <div
-        id="scan-output"
-        class="scan-output"
-    >
-
-        <div
-            class="scan-output-header"
-            style="
-                position: sticky;
-                top: 0;
-                z-index: 10;
-                background: white;
-                padding: 8px 0;
-                border-bottom: 1px solid #ddd;
-            "
-        >
-
+    <div id="scan-panel" class="scan-panel">
+        <div class="scan-output-header">
             <span>Live Scan Output</span>
-
             <button
                 id="cancel-scan-button"
                 type="button"
                 onclick="cancelScan()"
-                style="
-                    float: right;
-                    background: #e53e3e;
-                    color: white;
-                    border: none;
-                    padding: 6px 12px;
-                    border-radius: 4px;
-                    cursor: pointer;
-                "
+                style="float: right; background: #e53e3e; color: white; border: none; padding: 6px 12px; border-radius: 4px; cursor: pointer;"
             >
                 Cancel Analysis
             </button>
+            <div style="clear: both;"></div>
         </div>
+        <div id="scan-output" class="scan-output">
+            <div id="scan-output-text"></div>
+        </div>
+    </div>
 
-        <div id="scan-output-text"></div>
-
+    <!-- ANALYZE RELEASE TYPE DIALOG -->
+    <div id="analyze-dialog" class="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="analyze-dialog-title" style="display: none;">
+        <div class="analyze-dialog-card">
+            <h2 id="analyze-dialog-title">Choose release types to analyze</h2>
+            <p>Select any combination. All three are selected by default.</p>
+            <label class="release-type-option"><input type="checkbox" name="dialog_scan_types" value="album" checked><span>Albums</span></label>
+            <label class="release-type-option"><input type="checkbox" name="dialog_scan_types" value="single" checked><span>Singles</span></label>
+            <label class="release-type-option"><input type="checkbox" name="dialog_scan_types" value="ep" checked><span>EPs</span></label>
+            <p id="analyze-dialog-error" class="dialog-error" style="display: none;">Select at least one release type.</p>
+            <div class="dialog-actions">
+                <button type="button" onclick="confirmAnalyzeSelection()">Analyze Now</button>
+                <button type="button" class="secondary-button" onclick="closeAnalyzeDialog()">Cancel</button>
+            </div>
+        </div>
     </div>
 
 
@@ -2131,7 +2160,7 @@ HTML = """
 
                     <p class="release-count">
 
-                        Releases to scan:
+                        Total Deezer releases (all types):
                         <strong>
                             {{ candidate.release_count }}
                         </strong>
@@ -2141,6 +2170,7 @@ HTML = """
                     <form
                         method="POST"
                         action="/scan"
+                        onsubmit="return openAnalyzeDialog(this)"
                     >
 
                         <input
@@ -2475,6 +2505,52 @@ HTML = """
 
 <script>
 
+    let pendingAnalyzeForm = null;
+
+    function openAnalyzeDialog(form) {
+        pendingAnalyzeForm = form;
+        const dialog = document.getElementById("analyze-dialog");
+        const error = document.getElementById("analyze-dialog-error");
+        if (!dialog) return true;
+        error.style.display = "none";
+        dialog.style.display = "flex";
+        return false;
+    }
+
+    function closeAnalyzeDialog() {
+        const dialog = document.getElementById("analyze-dialog");
+        if (dialog) dialog.style.display = "none";
+        pendingAnalyzeForm = null;
+    }
+
+    function confirmAnalyzeSelection() {
+        if (!pendingAnalyzeForm) {
+            closeAnalyzeDialog();
+            return;
+        }
+        const selected = Array.from(
+            document.querySelectorAll('input[name="dialog_scan_types"]:checked')
+        ).map(input => input.value);
+        const error = document.getElementById("analyze-dialog-error");
+        if (selected.length === 0) {
+            error.style.display = "block";
+            return;
+        }
+        pendingAnalyzeForm.querySelectorAll('input[name="scan_types"]').forEach(input => input.remove());
+        selected.forEach(type => {
+            const hidden = document.createElement("input");
+            hidden.type = "hidden";
+            hidden.name = "scan_types";
+            hidden.value = type;
+            pendingAnalyzeForm.appendChild(hidden);
+        });
+        const formToSubmit = pendingAnalyzeForm;
+        const dialog = document.getElementById("analyze-dialog");
+        if (dialog) dialog.style.display = "none";
+        pendingAnalyzeForm = null;
+        HTMLFormElement.prototype.submit.call(formToSubmit);
+    }
+
     function cancelScan() {
 
         const button =
@@ -2582,6 +2658,9 @@ HTML = """
 
             .then(data => {
 
+                const panel =
+                    document.getElementById("scan-panel");
+
                 const output =
                     document.getElementById(
                         "scan-output"
@@ -2598,7 +2677,7 @@ HTML = """
                     data.log.length > 0
                 ) {
 
-                    output.style.display =
+                    panel.style.display =
                         "block";
 
                     outputText.textContent =
@@ -2901,6 +2980,14 @@ def run_scan():
         ""
     ).strip()
 
+    allowed_types = {"album", "single", "ep"}
+    selected_types = [
+        item for item in request.form.getlist("scan_types")
+        if item in allowed_types
+    ]
+    if not selected_types:
+        selected_types = ["album", "single", "ep"]
+
 
     if not artist_id:
 
@@ -2962,7 +3049,8 @@ def run_scan():
             artist_id,
             artist_name,
             artist_query,
-            expected_releases
+            expected_releases,
+            selected_types
         ),
         daemon=True
     )
