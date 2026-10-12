@@ -1187,34 +1187,77 @@ def check_musicbrainz_barcode(
 
         return False
 
-    search_title = (
-        fallback_title
-        if fallback_title_normalized
-        and fallback_title_normalized != title_normalized
-        else album_title
-    )
+    search_titles = [
+        fallback_title,
+        album_title,
+        f"{fallback_title} - EP"
+    ]
 
-    fallback_query = (
-        f'release:"{search_title}"'
-    )
+    unique_search_titles = []
+    seen_search_titles = set()
+
+    for search_title in search_titles:
+
+        search_title_key = normalize_text(
+            search_title
+        )
+
+        if not search_title_key or search_title_key in seen_search_titles:
+
+            continue
+
+        seen_search_titles.add(
+            search_title_key
+        )
+
+        unique_search_titles.append(
+            search_title
+        )
 
     add_scan_log(
         "    UPC not found. "
         "Trying album title match..."
     )
 
-    fallback_data = musicbrainz_request({
-        "query": fallback_query,
-        "fmt": "json",
-        "limit": 10
-    })
-    if fallback_data is None:
+    fallback_releases_by_id = {}
+    successful_search = False
+
+    for search_title in unique_search_titles:
+
+        fallback_query = (
+            f'release:"{search_title}"'
+        )
+
+        fallback_data = musicbrainz_request({
+            "query": fallback_query,
+            "fmt": "json",
+            "limit": 10
+        })
+
+        if fallback_data is None:
+
+            continue
+
+        successful_search = True
+
+        for release in fallback_data.get(
+            "releases",
+            []
+        ):
+
+            release_id = release.get(
+                "id"
+            )
+
+            if release_id:
+                fallback_releases_by_id[release_id] = release
+
+    if not successful_search:
 
         return None
 
-    fallback_releases = fallback_data.get(
-        "releases",
-        []
+    fallback_releases = list(
+        fallback_releases_by_id.values()
     )
 
     for release in fallback_releases:
