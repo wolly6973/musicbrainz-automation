@@ -1229,7 +1229,7 @@ def check_musicbrainz_barcode(
     query_artist_names = [
         name.strip()
         for name in re.split(
-            r"\\s*&\\s*",
+            r"\s*&\s*",
             artist_name
         )
         if name.strip()
