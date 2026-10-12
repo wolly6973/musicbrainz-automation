@@ -912,6 +912,25 @@ def get_deezer_albums(artist_id):
     return albums
 
 
+def normalize_deezer_record_type(album):
+    """Normalize explicit Deezer types; do not infer from titles."""
+    raw_type = str(album.get("record_type") or "").strip().lower()
+    return {"album": "album", "single": "single", "ep": "ep"}.get(raw_type)
+
+
+def filter_deezer_releases(albums, selected_types):
+    """Return matching release types and entries whose type is unknown."""
+    selected = set(selected_types)
+    matching, unknown = [], []
+    for album in albums:
+        release_type = normalize_deezer_record_type(album)
+        if release_type is None:
+            unknown.append(album)
+        elif release_type in selected:
+            matching.append(album)
+    return matching, unknown
+
+
 def get_deezer_album_upc(album_id):
     """
     Retrieve the UPC/barcode for a Deezer album.
@@ -1314,7 +1333,8 @@ def perform_scan(
     artist_id,
     artist_name,
     artist_query,
-    expected_releases=None
+    expected_releases=None,
+    selected_types=None
 ):
     """
     Perform the complete Deezer -> UPC -> MusicBrainz scan.
@@ -1324,6 +1344,12 @@ def perform_scan(
     """
 
     global current_data, musicbrainz_scan_cache, musicbrainz_scan_stats
+
+    if selected_types is None:
+        selected_types = ["album", "single", "ep"]
+    selected_types = [item for item in selected_types if item in {"album", "single", "ep"}]
+    if not selected_types:
+        selected_types = ["album", "single", "ep"]
 
     set_scan_running(True)
     clear_scan_log()
@@ -1338,30 +1364,36 @@ def perform_scan(
             f"(Deezer ID: {artist_id})"
         )
 
-        if expected_releases is not None:
-
-            add_scan_log(
-                f"Expected releases to scan: "
-                f"{expected_releases}"
-            )
-
+        type_labels = {"album": "Albums", "single": "Singles", "ep": "EPs"}
+        selected_labels = [type_labels[item] for item in selected_types]
+        add_scan_log("Release types selected: " + ", ".join(selected_labels))
         add_scan_log("")
+        add_scan_log("Retrieving release catalog from Deezer...")
 
-        add_scan_log(
-            "Retrieving album catalog from Deezer..."
-        )
+        all_albums = get_deezer_albums(artist_id)
+        albums, unknown_type_albums = filter_deezer_releases(all_albums, selected_types)
+        add_scan_log("Retrieved " + str(len(all_albums)) + " total Deezer catalog entries.")
+        add_scan_log("Matched " + str(len(albums)) + " selected release types.")
 
-        albums = get_deezer_albums(
-            artist_id
-        )
+        if unknown_type_albums:
+            unknown_counts = {}
+            for item in unknown_type_albums:
+                raw_type = str(item.get("record_type") or "(missing)").strip().lower() or "(missing)"
+                unknown_counts[raw_type] = unknown_counts.get(raw_type, 0) + 1
+            summary = ", ".join(str(kind) + "=" + str(count) for kind, count in sorted(unknown_counts.items()))
+            add_scan_log("Skipped entries with unrecognized Deezer record_type: " + summary)
+
+        expected_releases = len(albums)
+        add_scan_log("Expected releases to scan: " + str(expected_releases))
+        add_scan_log("")
 
         if not albums:
 
             add_scan_log("")
 
             add_scan_log(
-                "ERROR: No album catalog entries "
-                "were found."
+                "ERROR: No Deezer releases matched the selected types "
+                f"({', '.join(selected_labels)})."
             )
 
             current_data = {
@@ -1383,14 +1415,7 @@ def perform_scan(
 
             return
 
-        total_albums = len(
-            albums
-        )
-
-        add_scan_log(
-            f"Retrieved {total_albums} album entries "
-            f"from Deezer."
-        )
+        total_albums = len(albums)
 
         add_scan_log("")
 
