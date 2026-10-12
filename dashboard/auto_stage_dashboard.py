@@ -1222,41 +1222,59 @@ def check_musicbrainz_barcode(
     fallback_releases_by_id = {}
     successful_search = False
 
+    # Keep the source artist names for the MusicBrainz query. The
+    # normalized versions above are for comparison only; punctuation
+    # can be meaningful in MusicBrainz artist names (for example,
+    # "Forrest.").
+    query_artist_names = [
+        name.strip()
+        for name in re.split(
+            r"\\s*&\\s*",
+            artist_name
+        )
+        if name.strip()
+    ]
+
     for search_title in unique_search_titles:
 
         artist_query = " OR ".join(
             f'artist:"{name}"'
-            for name in artist_names
+            for name in query_artist_names
         )
 
-        fallback_query = (
-            f'({artist_query}) '
-            f'AND release:"{search_title}"'
-        )
+        # Try the artist-qualified query first, then a wider title query.
+        # Some valid release credits are not indexed by the artist field
+        # exactly as the source service presents the primary artist.
+        fallback_queries = [
+            f'({artist_query}) AND release:"{search_title}"',
+            f'release:"{search_title}"',
+        ]
 
-        fallback_data = musicbrainz_request({
-            "query": fallback_query,
-            "fmt": "json",
-            "limit": 25
-        })
+        for fallback_query in fallback_queries:
 
-        if fallback_data is None:
+            fallback_data = musicbrainz_request({
+                "query": fallback_query,
+                "fmt": "json",
+                "limit": 100
+            })
 
-            continue
+            if fallback_data is None:
 
-        successful_search = True
+                continue
 
-        for release in fallback_data.get(
-            "releases",
-            []
-        ):
+            successful_search = True
 
-            release_id = release.get(
-                "id"
-            )
+            for release in fallback_data.get(
+                "releases",
+                []
+            ):
 
-            if release_id:
-                fallback_releases_by_id[release_id] = release
+                release_id = release.get(
+                    "id"
+                )
+
+                if release_id:
+                    fallback_releases_by_id[release_id] = release
 
     if not successful_search:
 
