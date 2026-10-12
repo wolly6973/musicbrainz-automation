@@ -1152,6 +1152,13 @@ def check_musicbrainz_barcode(
         flags=re.IGNORECASE
     )
 
+    fallback_title = re.sub(
+        r"\s+-\s+EP\s*$",
+        "",
+        fallback_title,
+        flags=re.IGNORECASE
+    )
+
     fallback_title_normalized = normalize_text(
         fallback_title
     )
