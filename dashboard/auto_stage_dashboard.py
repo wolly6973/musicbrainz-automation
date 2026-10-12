@@ -1407,8 +1407,8 @@ def perform_scan(
                 "no_upc": 0,
                 "missing_items": [],
                 "status": (
-                    "No album catalog entries found "
-                    "for verified artist."
+                    "No Deezer releases matched the "
+                    "selected release types."
                 ),
                 "candidates": []
             }
