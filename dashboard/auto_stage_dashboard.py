@@ -1219,17 +1219,40 @@ def check_musicbrainz_barcode(
 
     for release in fallback_releases:
 
-        release_title = normalize_text(
-            release.get(
-                "title",
-                ""
-            )
+        release_title_raw = release.get(
+            "title",
+            ""
         )
 
-        if release_title not in {
+        release_title = normalize_text(
+            release_title_raw
+        )
+
+        release_title_base = re.sub(
+            r"\s*\((?:feat\.?|featuring)\s+[^)]*\)\s*$",
+            "",
+            release_title_raw,
+            flags=re.IGNORECASE
+        )
+
+        release_title_base = re.sub(
+            r"\s+-\s+EP\s*$",
+            "",
+            release_title_base,
+            flags=re.IGNORECASE
+        )
+
+        release_title_base_normalized = normalize_text(
+            release_title_base
+        )
+
+        if not {
             title_normalized,
-        fallback_title_normalized
-        }:
+            fallback_title_normalized
+        }.intersection({
+            release_title,
+            release_title_base_normalized
+        }):
 
             continue
 
