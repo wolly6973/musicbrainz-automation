@@ -1004,12 +1004,18 @@ def check_musicbrainz_barcode(
         )
 
     def musicbrainz_request(
-        params
+        params,
+        release_id=None
     ):
 
-        url = (
-            f"{MUSICBRAINZ_API}/release/"
-        )
+        if release_id:
+            url = (
+                f"{MUSICBRAINZ_API}/release/{release_id}"
+            )
+        else:
+            url = (
+                f"{MUSICBRAINZ_API}/release/"
+            )
 
         for attempt in range(
             1,
@@ -1334,33 +1340,85 @@ def check_musicbrainz_barcode(
 
             continue
 
-        release_artist_match = False
+        def credits_match(artist_credits):
+            for artist_credit in artist_credits or []:
 
-        for artist_credit in release.get(
-            "artist-credit",
-            []
-        ):
+                # MusicBrainz artist-credit arrays can contain joinphrase
+                # strings as well as artist dictionaries.
+                if not isinstance(artist_credit, dict):
+                    continue
 
-            artist = artist_credit.get(
-                "artist",
-                {}
-            )
-
-            candidate_artist = normalize_text(
-                artist.get(
-                    "name",
-                    ""
+                artist = artist_credit.get(
+                    "artist",
+                    {}
                 )
-            )
 
-            if candidate_artist in artist_names:
+                candidate_artist = normalize_text(
+                    artist.get(
+                        "name",
+                        ""
+                    )
+                )
 
-                release_artist_match = True
-                break
+                if candidate_artist in artist_names:
+                    return True
 
-        if release_artist_match:
+            return False
 
+        # First check the release-level credit.
+        if credits_match(
+            release.get("artist-credit", [])
+        ):
             return True
+
+        # A release can be credited to Various Artists while the target
+        # artist appears only on one or more tracks. Fetch the full
+        # release with recordings and artist credits before rejecting it.
+        release_id = release.get("id")
+
+        if not release_id:
+            continue
+
+        detail_data = musicbrainz_request(
+            {
+                "fmt": "json",
+                "inc": "recordings+artist-credits"
+            },
+            release_id=release_id
+        )
+
+        if detail_data is None:
+            add_scan_log(
+                f'    Could not inspect track credits for '
+                f'MusicBrainz release {release_id}.'
+            )
+            continue
+
+        for medium in detail_data.get("media", []):
+
+            for track in medium.get("tracks", []):
+
+                if credits_match(
+                    track.get("artist-credit", [])
+                ):
+                    add_scan_log(
+                        f'    Matched artist on track '
+                        f'"{track.get("title", "")}" '
+                        f'in MusicBrainz release {release_id}.'
+                    )
+                    return True
+
+                recording = track.get("recording") or {}
+
+                if credits_match(
+                    recording.get("artist-credit", [])
+                ):
+                    add_scan_log(
+                        f'    Matched artist on recording '
+                        f'"{recording.get("title", track.get("title", ""))}" '
+                        f'in MusicBrainz release {release_id}.'
+                    )
+                    return True
 
     return False
 
