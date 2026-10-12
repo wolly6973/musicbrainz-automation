@@ -1237,14 +1237,14 @@ def check_musicbrainz_barcode(
 
     for search_title in unique_search_titles:
 
+        # MusicBrainz's artistname field searches individual credited
+        # artists; artist searches the combined credit string.
         artist_query = " OR ".join(
-            f'artist:"{name}"'
+            f'artistname:"{name}"'
             for name in query_artist_names
         )
 
-        # Try the artist-qualified query first, then a wider title query.
-        # Some valid release credits are not indexed by the artist field
-        # exactly as the source service presents the primary artist.
+        # Search by individual artist credit first, then broaden to title.
         fallback_queries = [
             f'({artist_query}) AND release:"{search_title}"',
             f'release:"{search_title}"',
@@ -1260,14 +1260,25 @@ def check_musicbrainz_barcode(
 
             if fallback_data is None:
 
+                add_scan_log(
+                    f'    MusicBrainz search failed for '
+                    f'"{search_title}" ({fallback_query}).'
+                )
                 continue
 
             successful_search = True
-
-            for release in fallback_data.get(
+            found_releases = fallback_data.get(
                 "releases",
                 []
-            ):
+            )
+
+            add_scan_log(
+                f'    MusicBrainz search "{search_title}" '
+                f'({ "artist-qualified" if "artistname:" in fallback_query else "title-only" }): '
+                f'{len(found_releases)} result(s).'
+            )
+
+            for release in found_releases:
 
                 release_id = release.get(
                     "id"
