@@ -22,6 +22,10 @@ HARMONY_BROWSER_URL = os.getenv("HARMONY_BROWSER_URL", "http://localhost:8001")
 DEEZER_API = "https://api.deezer.com"
 MUSICBRAINZ_API = "https://musicbrainz.org/ws/2"
 
+# Successful MusicBrainz responses cached for one scan only.
+musicbrainz_scan_cache = {}
+musicbrainz_scan_stats = {"requests": 0, "cache_hits": 0}
+
 MUSICBRAINZ_SEED_URL = "https://musicbrainz.org/release/add?skip_confirmation=1"
 
 
@@ -975,151 +979,205 @@ def check_musicbrainz_barcode(
     Check MusicBrainz for an existing release.
 
     Matching order:
-        1. Exact barcode match
-        2. Album title + artist-credit fallback
+        1. Exact barcode lookup
+        2. Recording title + artist lookup
+        3. Artist-qualified release-title lookup
+        4. Broad release-title lookup
 
-    Returns:
-        True  = release found
-        False = successful lookup, release not found
-        None  = lookup failed after retries
+    Search responses and release details are cached for the duration
+    of a scan. A positive result is returned only after validating
+    the title and artist credit.
     """
 
     def normalize_text(value):
-
         if not value:
             return ""
-
-        value = str(
-            value
-        ).lower()
 
         value = re.sub(
             r"[^a-z0-9]+",
             " ",
-            value
+            str(value).lower()
         )
+        return " ".join(value.split())
 
-        return " ".join(
-            value.split()
+    def title_variants(value):
+        value = re.sub(
+            r"\s*\((?:feat\.?|featuring)\s+[^)]*\)\s*$",
+            "",
+            value or "",
+            flags=re.IGNORECASE
         )
+        value = re.sub(
+            r"\s+-\s+EP\s*$",
+            "",
+            value,
+            flags=re.IGNORECASE
+        )
+        return value
 
-    def musicbrainz_request(
-        params,
-        release_id=None
-    ):
+    def credits_match(artist_credits):
+        for artist_credit in artist_credits or []:
+            if not isinstance(artist_credit, dict):
+                continue
 
-        if release_id:
-            url = (
-                f"{MUSICBRAINZ_API}/release/{release_id}"
-            )
+            artist = artist_credit.get("artist") or {}
+            candidate_artist = normalize_text(artist.get("name", ""))
+
+            if candidate_artist and candidate_artist in artist_names:
+                return True
+
+        return False
+
+    def musicbrainz_request(params, endpoint="release", item_id=None):
+        if item_id:
+            url = f"{MUSICBRAINZ_API}/{endpoint}/{item_id}"
         else:
-            url = (
-                f"{MUSICBRAINZ_API}/release/"
-            )
+            url = f"{MUSICBRAINZ_API}/{endpoint}/"
 
-        for attempt in range(
-            1,
-            MB_MAX_RETRIES + 1
-        ):
+        # Cache successful responses, including valid empty search results.
+        # Never cache transient failures, so a later attempt can recover.
+        cache_key = (
+            url,
+            tuple(sorted((str(key), str(value)) for key, value in params.items()))
+        )
+        cached = musicbrainz_scan_cache.get(cache_key)
+        if cached is not None:
+            musicbrainz_scan_stats["cache_hits"] += 1
+            return cached
 
+        for attempt in range(1, MB_MAX_RETRIES + 1):
             wait_for_musicbrainz()
+            musicbrainz_scan_stats["requests"] += 1
 
             try:
-
-                response = session.get(
-                    url,
-                    params=params,
-                    timeout=10
-                )
+                response = session.get(url, params=params, timeout=10)
 
                 if response.status_code == 200:
-
-                    return response.json()
+                    data = response.json()
+                    musicbrainz_scan_cache[cache_key] = data
+                    return data
 
                 if response.status_code in RETRY_STATUS_CODES:
-
-                    delay = (
-                        min(
-                            30,
-                            2 ** attempt
-                        )
-                        + random.uniform(
-                            0,
-                            1
-                        )
-                    )
-
+                    delay = min(30, 2 ** attempt) + random.uniform(0, 1)
                     add_scan_log(
-                        f"    MusicBrainz returned HTTP "
-                        f"{response.status_code}. "
+                        f"    MusicBrainz returned HTTP {response.status_code}. "
                         f"Retrying in {delay:.1f}s "
-                        f"(attempt {attempt}/"
-                        f"{MB_MAX_RETRIES})..."
+                        f"(attempt {attempt}/{MB_MAX_RETRIES})..."
                     )
 
                     if attempt < MB_MAX_RETRIES:
-
-                        time.sleep(
-                            delay
-                        )
-
+                        time.sleep(delay)
                         continue
 
                     return None
 
                 add_scan_log(
-                    f"    MusicBrainz returned HTTP "
-                    f"{response.status_code}. "
+                    f"    MusicBrainz returned HTTP {response.status_code}. "
                     f"Not retrying."
                 )
-
                 return None
 
             except requests.RequestException as exc:
-
                 reset_http_session()
 
                 if attempt >= MB_MAX_RETRIES:
-
                     add_scan_log(
-                        f"    MusicBrainz request failed "
-                        f"after {MB_MAX_RETRIES} attempts: "
-                        f"{exc}"
+                        f"    MusicBrainz request failed after "
+                        f"{MB_MAX_RETRIES} attempts: {exc}"
                     )
-
                     return None
 
-                delay = (
-                    min(
-                        30,
-                        2 ** attempt
-                    )
-                    + random.uniform(
-                        0,
-                        1
-                    )
-                )
-
+                delay = min(30, 2 ** attempt) + random.uniform(0, 1)
                 add_scan_log(
-                    f"    MusicBrainz request error: "
-                    f"{exc}. "
+                    f"    MusicBrainz request error: {exc}. "
                     f"Retrying in {delay:.1f}s "
-                    f"(attempt {attempt}/"
-                    f"{MB_MAX_RETRIES})..."
+                    f"(attempt {attempt}/{MB_MAX_RETRIES})..."
                 )
-
-                time.sleep(
-                    delay
-                )
+                time.sleep(delay)
 
         return None
 
-    # --------------------------------------------------------
-    # First: exact barcode lookup
-    # --------------------------------------------------------
+    def release_matches(release):
+        """Validate release title and credits; fetch details only if needed."""
+        release_id = release.get("id")
+        release_title_raw = release.get("title", "")
+        release_title = normalize_text(release_title_raw)
+        release_title_base = normalize_text(title_variants(release_title_raw))
 
+        if not {title_normalized, fallback_title_normalized}.intersection(
+            {release_title, release_title_base}
+        ):
+            return False
+
+        if credits_match(release.get("artist-credit", [])):
+            return True
+
+        if not release_id:
+            return False
+
+        detail_data = musicbrainz_request(
+            {
+                "fmt": "json",
+                "inc": "recordings+artist-credits"
+            },
+            endpoint="release",
+            item_id=release_id
+        )
+
+        if detail_data is None:
+            add_scan_log(
+                f"    Could not inspect track credits for "
+                f"MusicBrainz release {release_id}."
+            )
+            return None
+
+        for medium in detail_data.get("media", []):
+            for track in medium.get("tracks", []):
+                if credits_match(track.get("artist-credit", [])):
+                    add_scan_log(
+                        f'    Matched artist on track "{track.get("title", "")}" '
+                        f"in MusicBrainz release {release_id}."
+                    )
+                    return True
+
+                recording = track.get("recording") or {}
+                if credits_match(recording.get("artist-credit", [])):
+                    add_scan_log(
+                        f'    Matched artist on recording '
+                        f'"{recording.get("title", track.get("title", ""))}" '
+                        f"in MusicBrainz release {release_id}."
+                    )
+                    return True
+
+        return False
+
+    # --------------------------------------------------------
+    # Prepare normalized titles and artist credits
+    # --------------------------------------------------------
+    if not album_title or not artist_name:
+        # Barcode lookup is still useful even when metadata is absent.
+        if not barcode:
+            return False
+
+    title_normalized = normalize_text(album_title)
+    fallback_title = title_variants(album_title or "")
+    fallback_title_normalized = normalize_text(fallback_title)
+
+    query_artist_names = [
+        name.strip()
+        for name in re.split(r"\s*&\s*", artist_name or "")
+        if name.strip()
+    ]
+    artist_names = {
+        normalize_text(name)
+        for name in query_artist_names
+        if normalize_text(name)
+    }
+
+    # --------------------------------------------------------
+    # 1. Exact barcode lookup
+    # --------------------------------------------------------
     if barcode:
-
         barcode_data = musicbrainz_request({
             "query": f"barcode:{barcode}",
             "fmt": "json",
@@ -1127,137 +1185,94 @@ def check_musicbrainz_barcode(
         })
 
         if barcode_data is None:
-
             return None
 
-        releases = barcode_data.get(
-            "releases",
-            []
-        )
-
-        if releases:
-
+        if barcode_data.get("releases", []):
             return True
 
-    # --------------------------------------------------------
-    # Second: artist + album title fallback
-    # --------------------------------------------------------
-
-    if not album_title or not artist_name:
-
+    if not title_normalized or not artist_names:
         return False
 
-    title_normalized = normalize_text(
-    album_title
-    )
-
-    fallback_title = re.sub(
-        r"\s*\((?:feat\.?|featuring)\s+[^)]*\)\s*$",
-        "",
-        album_title,
-        flags=re.IGNORECASE
-    )
-
-    fallback_title = re.sub(
-        r"\s+-\s+EP\s*$",
-        "",
-        fallback_title,
-        flags=re.IGNORECASE
-    )
-
-    fallback_title_normalized = normalize_text(
-        fallback_title
-    )
-
-    if not title_normalized:
-
-        return False
-
-    artist_names = [
-        normalize_text(
-            name
-        )
-        for name in re.split(
-            r"\s*&\s*",
-            artist_name
-        )
-    ]
-
-    artist_names = [
-        name
-        for name in artist_names
-        if name
-    ]
-
-    if not artist_names:
-
-        return False
-
-    search_titles = [
+    search_titles = []
+    seen_search_titles = set()
+    for search_title in (
         fallback_title,
         album_title,
         f"{fallback_title} - EP"
-    ]
-
-    unique_search_titles = []
-    seen_search_titles = set()
-
-    for search_title in search_titles:
-
-        search_title_key = normalize_text(
-            search_title
-        )
-
-        if not search_title_key or search_title_key in seen_search_titles:
-
-            continue
-
-        seen_search_titles.add(
-            search_title_key
-        )
-
-        unique_search_titles.append(
-            search_title
-        )
+    ):
+        key = normalize_text(search_title)
+        if key and key not in seen_search_titles:
+            seen_search_titles.add(key)
+            search_titles.append(search_title)
 
     add_scan_log(
-        "    UPC not found. "
-        "Trying album title match..."
+        "    UPC not found. Trying recording and release title matches..."
     )
 
-    fallback_releases_by_id = {}
-    successful_search = False
+    # --------------------------------------------------------
+    # 2. Recording title + artist search
+    # --------------------------------------------------------
+    recording_search_succeeded = False
 
-    # Keep the source artist names for the MusicBrainz query. The
-    # normalized versions above are for comparison only; punctuation
-    # can be meaningful in MusicBrainz artist names (for example,
-    # "Forrest.").
-    query_artist_names = [
-        name.strip()
-        for name in re.split(
-            r"\s*&\s*",
-            artist_name
-        )
-        if name.strip()
-    ]
+    for search_title in search_titles:
+        for query_artist in query_artist_names:
+            recording_query = (
+                f'recording:"{search_title}" AND artist:"{query_artist}"'
+            )
+            recording_data = musicbrainz_request(
+                {
+                    "query": recording_query,
+                    "fmt": "json",
+                    "limit": 25
+                },
+                endpoint="recording"
+            )
 
-    for search_title in unique_search_titles:
+            if recording_data is None:
+                continue
 
-        # MusicBrainz's artistname field searches individual credited
-        # artists; artist searches the combined credit string.
-        artist_query = " OR ".join(
-            f'artistname:"{name}"'
-            for name in query_artist_names
-        )
+            recording_search_succeeded = True
+            recordings = recording_data.get("recordings", [])
+            add_scan_log(
+                f'    MusicBrainz recording search "{search_title}" '
+                f'by "{query_artist}": {len(recordings)} result(s).'
+            )
 
-        # Search by individual artist credit first, then broaden to title.
+            for recording in recordings:
+                if normalize_text(recording.get("title", "")) not in {
+                    title_normalized,
+                    fallback_title_normalized
+                }:
+                    continue
+
+                if not credits_match(recording.get("artist-credit", [])):
+                    continue
+
+                for release in recording.get("releases", []):
+                    if release_matches(release) is True:
+                        add_scan_log(
+                            f'    Matched via recording "{recording.get("title", "")}".'
+                        )
+                        return True
+
+    # --------------------------------------------------------
+    # 3–4. Release-title searches, selective before broad
+    # --------------------------------------------------------
+    successful_release_search = False
+    seen_release_ids = set()
+
+    artist_query = " OR ".join(
+        f'artistname:"{name}"'
+        for name in query_artist_names
+    )
+
+    for search_title in search_titles:
         fallback_queries = [
-            f'({artist_query}) AND release:"{search_title}"',
-            f'release:"{search_title}"',
+            (f'({artist_query}) AND release:"{search_title}"', "artist-qualified"),
+            (f'release:"{search_title}"', "title-only")
         ]
 
-        for fallback_query in fallback_queries:
-
+        for fallback_query, search_kind in fallback_queries:
             fallback_data = musicbrainz_request({
                 "query": fallback_query,
                 "fmt": "json",
@@ -1265,165 +1280,32 @@ def check_musicbrainz_barcode(
             })
 
             if fallback_data is None:
-
                 add_scan_log(
-                    f'    MusicBrainz search failed for '
-                    f'"{search_title}" ({fallback_query}).'
+                    f'    MusicBrainz {search_kind} search failed for '
+                    f'"{search_title}".'
                 )
                 continue
 
-            successful_search = True
-            found_releases = fallback_data.get(
-                "releases",
-                []
-            )
-
+            successful_release_search = True
+            found_releases = fallback_data.get("releases", [])
             add_scan_log(
                 f'    MusicBrainz search "{search_title}" '
-                f'({ "artist-qualified" if "artistname:" in fallback_query else "title-only" }): '
-                f'{len(found_releases)} result(s).'
+                f'({search_kind}): {len(found_releases)} result(s).'
             )
 
             for release in found_releases:
-
-                release_id = release.get(
-                    "id"
-                )
-
-                if release_id:
-                    fallback_releases_by_id[release_id] = release
-
-    if not successful_search:
-
-        return None
-
-    fallback_releases = list(
-        fallback_releases_by_id.values()
-    )
-
-    for release in fallback_releases:
-
-        release_title_raw = release.get(
-            "title",
-            ""
-        )
-
-        release_title = normalize_text(
-            release_title_raw
-        )
-
-        release_title_base = re.sub(
-            r"\s*\((?:feat\.?|featuring)\s+[^)]*\)\s*$",
-            "",
-            release_title_raw,
-            flags=re.IGNORECASE
-        )
-
-        release_title_base = re.sub(
-            r"\s+-\s+EP\s*$",
-            "",
-            release_title_base,
-            flags=re.IGNORECASE
-        )
-
-        release_title_base_normalized = normalize_text(
-            release_title_base
-        )
-
-        if not {
-            title_normalized,
-            fallback_title_normalized
-        }.intersection({
-            release_title,
-            release_title_base_normalized
-        }):
-
-            continue
-
-        def credits_match(artist_credits):
-            for artist_credit in artist_credits or []:
-
-                # MusicBrainz artist-credit arrays can contain joinphrase
-                # strings as well as artist dictionaries.
-                if not isinstance(artist_credit, dict):
+                release_id = release.get("id")
+                if not release_id or release_id in seen_release_ids:
                     continue
 
-                artist = artist_credit.get(
-                    "artist",
-                    {}
-                )
-
-                candidate_artist = normalize_text(
-                    artist.get(
-                        "name",
-                        ""
-                    )
-                )
-
-                if candidate_artist in artist_names:
+                seen_release_ids.add(release_id)
+                if release_matches(release) is True:
                     return True
 
-            return False
-
-        # First check the release-level credit.
-        if credits_match(
-            release.get("artist-credit", [])
-        ):
-            return True
-
-        # A release can be credited to Various Artists while the target
-        # artist appears only on one or more tracks. Fetch the full
-        # release with recordings and artist credits before rejecting it.
-        release_id = release.get("id")
-
-        if not release_id:
-            continue
-
-        detail_data = musicbrainz_request(
-            {
-                "fmt": "json",
-                "inc": "recordings+artist-credits"
-            },
-            release_id=release_id
-        )
-
-        if detail_data is None:
-            add_scan_log(
-                f'    Could not inspect track credits for '
-                f'MusicBrainz release {release_id}.'
-            )
-            continue
-
-        for medium in detail_data.get("media", []):
-
-            for track in medium.get("tracks", []):
-
-                if credits_match(
-                    track.get("artist-credit", [])
-                ):
-                    add_scan_log(
-                        f'    Matched artist on track '
-                        f'"{track.get("title", "")}" '
-                        f'in MusicBrainz release {release_id}.'
-                    )
-                    return True
-
-                recording = track.get("recording") or {}
-
-                if credits_match(
-                    recording.get("artist-credit", [])
-                ):
-                    add_scan_log(
-                        f'    Matched artist on recording '
-                        f'"{recording.get("title", track.get("title", ""))}" '
-                        f'in MusicBrainz release {release_id}.'
-                    )
-                    return True
+    if not successful_release_search and not recording_search_succeeded:
+        return None
 
     return False
-
-
-
 # ============================================================
 # SCAN
 # ============================================================
@@ -1441,11 +1323,13 @@ def perform_scan(
     responsive and can display live progress.
     """
 
-    global current_data
+    global current_data, musicbrainz_scan_cache, musicbrainz_scan_stats
 
     set_scan_running(True)
     clear_scan_log()
     reset_scan_import_counter()
+    musicbrainz_scan_cache = {}
+    musicbrainz_scan_stats = {"requests": 0, "cache_hits": 0}
 
     try:
 
@@ -1723,6 +1607,14 @@ def perform_scan(
 
         add_scan_log(
             f"Lookup errors: {errors}"
+        )
+
+        add_scan_log(
+            f"MusicBrainz HTTP requests: {musicbrainz_scan_stats['requests']}"
+        )
+
+        add_scan_log(
+            f"MusicBrainz cache hits: {musicbrainz_scan_stats['cache_hits']}"
         )
 
         add_scan_log(
