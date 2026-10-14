@@ -1346,10 +1346,10 @@ def perform_scan(
     global current_data, musicbrainz_scan_cache, musicbrainz_scan_stats
 
     if selected_types is None:
-        selected_types = ["album", "single", "ep"]
+        selected_types = ["album", "ep", "single"]
     selected_types = [item for item in selected_types if item in {"album", "single", "ep"}]
     if not selected_types:
-        selected_types = ["album", "single", "ep"]
+        selected_types = ["album", "ep", "single"]
 
     set_scan_running(True)
     clear_scan_log()
@@ -1364,7 +1364,7 @@ def perform_scan(
             f"(Deezer ID: {artist_id})"
         )
 
-        type_labels = {"album": "Albums", "single": "Singles", "ep": "EPs"}
+        type_labels = {"album": "Albums", "ep": "EPs", "single": "Singles"}
         selected_labels = [type_labels[item] for item in selected_types]
         add_scan_log("Release types selected: " + ", ".join(selected_labels))
         add_scan_log("")
@@ -1406,6 +1406,8 @@ def perform_scan(
                 "errors": 0,
                 "no_upc": 0,
                 "missing_items": [],
+                "selected_types": list(selected_types),
+                "scan_cancelled": False,
                 "status": (
                     "No Deezer releases matched the "
                     "selected release types."
@@ -1477,6 +1479,7 @@ def perform_scan(
                     "errors": errors,
                     "no_upc": no_upc,
                     "missing_items": missing_items,
+                    "selected_types": list(selected_types),
                     "scan_cancelled": True,
                     "status": (
                         f'Analysis of "{artist_name}" was cancelled. '
@@ -1635,6 +1638,7 @@ def perform_scan(
                 "errors": errors,
                 "no_upc": no_upc,
                 "missing_items": missing_items,
+                "selected_types": list(selected_types),
                 "scan_cancelled": True,
                 "status": (
                     f'Analysis of "{artist_name}" was cancelled. '
@@ -1702,6 +1706,7 @@ def perform_scan(
             "errors": errors,
             "no_upc": no_upc,
             "missing_items": missing_items,
+            "selected_types": list(selected_types),
             "scan_cancelled": False,
             "status": (
                 f'Scan completed for "{artist_name}"! '
@@ -2165,8 +2170,8 @@ HTML = """
             <h2 id="analyze-dialog-title">Choose release types to analyze</h2>
             <p>Select any combination. All three are selected by default.</p>
             <label class="release-type-option"><input type="checkbox" name="dialog_scan_types" value="album" checked><span>Albums</span></label>
-            <label class="release-type-option"><input type="checkbox" name="dialog_scan_types" value="single" checked><span>Singles</span></label>
             <label class="release-type-option"><input type="checkbox" name="dialog_scan_types" value="ep" checked><span>EPs</span></label>
+            <label class="release-type-option"><input type="checkbox" name="dialog_scan_types" value="single" checked><span>Singles</span></label>
             <p id="analyze-dialog-error" class="dialog-error" style="display: none;">Select at least one release type.</p>
             <div class="dialog-actions">
                 <button type="button" onclick="confirmAnalyzeSelection()">Analyze Now</button>
@@ -2261,6 +2266,28 @@ HTML = """
 
         </div>
 
+    {% endif %}
+
+
+    {% if data.scan_cancelled %}
+        <div class="search-box">
+            <h2>Analysis Cancelled</h2>
+            <p>
+                You can restart this artist without searching again.
+                Continue with the previous release types, or change the scope first.
+            </p>
+            <form id="restart-analysis-form" method="POST" action="/scan">
+                <input type="hidden" name="artist_id" value="{{ data.artist_id }}">
+                <input type="hidden" name="artist_name" value="{{ data.resolved_name }}">
+                <input type="hidden" name="artist_query" value="{{ data.artist_query }}">
+                <input type="hidden" name="expected_releases" value="{{ data.albums_count }}">
+                {% for release_type in data.selected_types or ['album', 'ep', 'single'] %}
+                    <input type="hidden" name="scan_types" value="{{ release_type }}">
+                {% endfor %}
+                <button type="button" onclick="continuePreviousAnalysis()">Continue with Previous Selection</button>
+                <button type="button" class="secondary-button" onclick="changeAnalysisScope()">Change Release Types</button>
+            </form>
+        </div>
     {% endif %}
 
 
@@ -2563,15 +2590,36 @@ HTML = """
 <script>
 
     let pendingAnalyzeForm = null;
+    const previousScanTypes = {{ (data.selected_types or ["album", "ep", "single"])|tojson }};
 
-    function openAnalyzeDialog(form) {
+    function openAnalyzeDialog(form, restorePreviousSelection = false) {
         pendingAnalyzeForm = form;
         const dialog = document.getElementById("analyze-dialog");
         const error = document.getElementById("analyze-dialog-error");
         if (!dialog) return true;
         error.style.display = "none";
+
+        const checkboxes = Array.from(
+            document.querySelectorAll('input[name="dialog_scan_types"]')
+        );
+        checkboxes.forEach(input => {
+            input.checked = restorePreviousSelection
+                ? previousScanTypes.includes(input.value)
+                : true;
+        });
+
         dialog.style.display = "flex";
         return false;
+    }
+
+    function continuePreviousAnalysis() {
+        const form = document.getElementById("restart-analysis-form");
+        if (form) HTMLFormElement.prototype.submit.call(form);
+    }
+
+    function changeAnalysisScope() {
+        const form = document.getElementById("restart-analysis-form");
+        if (form) openAnalyzeDialog(form, true);
     }
 
     function closeAnalyzeDialog() {
