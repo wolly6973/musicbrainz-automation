@@ -2668,10 +2668,7 @@ HTML = """
 
     function changeAnalysisScope() {
         const form = document.getElementById("restart-analysis-form");
-        if (form) {
-            form.querySelectorAll('input[name="resume_scan"]').forEach(input => input.remove());
-            openAnalyzeDialog(form, true);
-        }
+        if (form) openAnalyzeDialog(form, true);
     }
 
     function closeAnalyzeDialog() {
@@ -2694,6 +2691,8 @@ HTML = """
             return;
         }
         pendingAnalyzeForm.querySelectorAll('input[name="scan_types"]').forEach(input => input.remove());
+        // Choosing a new release scope starts a fresh scan, not a resume.
+        pendingAnalyzeForm.querySelectorAll('input[name="resume_scan"]').forEach(input => input.remove());
         selected.forEach(type => {
             const hidden = document.createElement("input");
             hidden.type = "hidden";
@@ -3224,6 +3223,10 @@ def run_scan():
         current_data["scan_cancelled"] = False
         current_data["status"] = "Resuming saved analysis from its last checkpoint."
         save_last_scan()
+
+    # Persist the fresh-scan reset too, so an early container restart cannot
+    # accidentally resurrect an older scan checkpoint.
+    save_last_scan()
 
 
     # Start background scan.
