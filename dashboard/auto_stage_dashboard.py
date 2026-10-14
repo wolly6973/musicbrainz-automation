@@ -504,6 +504,16 @@ _saved_last_scan = load_last_scan()
 
 if _saved_last_scan:
     current_data = _saved_last_scan
+    if (
+        current_data.get("scan_catalog")
+        and not current_data.get("scan_complete", False)
+    ):
+        current_data["scan_cancelled"] = True
+        current_data["status"] = (
+            "The previous analysis was interrupted. "
+            "Resume to continue from its last saved release."
+        )
+        save_last_scan()
 
 # Tracks imports sent during the current scan.
 current_scan_import_count = 0
@@ -1334,7 +1344,8 @@ def perform_scan(
     artist_name,
     artist_query,
     expected_releases=None,
-    selected_types=None
+    selected_types=None,
+    resume_state=None
 ):
     """
     Perform the complete Deezer -> UPC -> MusicBrainz scan.
@@ -1350,6 +1361,11 @@ def perform_scan(
     selected_types = [item for item in selected_types if item in {"album", "single", "ep"}]
     if not selected_types:
         selected_types = ["album", "ep", "single"]
+    if resume_state:
+        selected_types = [
+            item for item in resume_state.get("selected_types", selected_types)
+            if item in {"album", "single", "ep"}
+        ] or selected_types
 
     set_scan_running(True)
     clear_scan_log()
@@ -1358,32 +1374,55 @@ def perform_scan(
     musicbrainz_scan_stats = {"requests": 0, "cache_hits": 0}
 
     try:
-
         add_scan_log(
             f'Starting scan for "{artist_name}" '
             f"(Deezer ID: {artist_id})"
         )
-
         type_labels = {"album": "Albums", "ep": "EPs", "single": "Singles"}
         selected_labels = [type_labels[item] for item in selected_types]
         add_scan_log("Release types selected: " + ", ".join(selected_labels))
         add_scan_log("")
-        add_scan_log("Retrieving release catalog from Deezer...")
 
-        all_albums = get_deezer_albums(artist_id)
-        albums, unknown_type_albums = filter_deezer_releases(all_albums, selected_types)
-        add_scan_log("Retrieved " + str(len(all_albums)) + " total Deezer catalog entries.")
-        add_scan_log("Matched " + str(len(albums)) + " selected release types.")
+        if resume_state and isinstance(resume_state.get("scan_catalog"), list) and resume_state.get("scan_catalog"):
+            albums = list(resume_state["scan_catalog"])
+            start_index = max(0, min(len(albums), int(resume_state.get("next_index", 0) or 0)))
+            existing = int(resume_state.get("existing", 0) or 0)
+            errors = int(resume_state.get("errors", 0) or 0)
+            no_upc = int(resume_state.get("no_upc", 0) or 0)
+            checked_count = int(resume_state.get("checked_count", 0) or 0)
+            missing_items = list(resume_state.get("missing_items", []))
+            total_albums = len(albums)
+            add_scan_log(
+                f"Resuming saved analysis at release {start_index + 1} "
+                f"of {total_albums}; {start_index} release(s) already processed."
+            )
+            add_scan_log(
+                f"Restored results: {len(missing_items)} missing, "
+                f"{existing} existing, {errors} lookup errors, "
+                f"{no_upc} without UPC."
+            )
+        else:
+            add_scan_log("Retrieving release catalog from Deezer...")
+            all_albums = get_deezer_albums(artist_id)
+            albums, unknown_type_albums = filter_deezer_releases(all_albums, selected_types)
+            add_scan_log("Retrieved " + str(len(all_albums)) + " total Deezer catalog entries.")
+            add_scan_log("Matched " + str(len(albums)) + " selected release types.")
+            if unknown_type_albums:
+                unknown_counts = {}
+                for item in unknown_type_albums:
+                    raw_type = str(item.get("record_type") or "(missing)").strip().lower() or "(missing)"
+                    unknown_counts[raw_type] = unknown_counts.get(raw_type, 0) + 1
+                summary = ", ".join(str(kind) + "=" + str(count) for kind, count in sorted(unknown_counts.items()))
+                add_scan_log("Skipped entries with unrecognized Deezer record_type: " + summary)
+            start_index = 0
+            existing = 0
+            errors = 0
+            no_upc = 0
+            checked_count = 0
+            missing_items = []
+            total_albums = len(albums)
 
-        if unknown_type_albums:
-            unknown_counts = {}
-            for item in unknown_type_albums:
-                raw_type = str(item.get("record_type") or "(missing)").strip().lower() or "(missing)"
-                unknown_counts[raw_type] = unknown_counts.get(raw_type, 0) + 1
-            summary = ", ".join(str(kind) + "=" + str(count) for kind, count in sorted(unknown_counts.items()))
-            add_scan_log("Skipped entries with unrecognized Deezer record_type: " + summary)
-
-        expected_releases = len(albums)
+        expected_releases = total_albums
         add_scan_log("Expected releases to scan: " + str(expected_releases))
         add_scan_log("")
 
@@ -1417,29 +1456,51 @@ def perform_scan(
 
             return
 
-        total_albums = len(albums)
+        catalog_snapshot = [
+            {
+                "id": album.get("id"),
+                "title": album.get("title", "Unknown Title"),
+                "cover_medium": album.get("cover_medium", ""),
+                "record_type": album.get("record_type")
+            }
+            for album in albums
+        ]
+
+        def save_progress(next_index, cancelled=False, status=None):
+            global current_data
+            current_data = {
+                "artist_query": artist_query,
+                "resolved_name": artist_name,
+                "artist_id": artist_id,
+                "albums_count": total_albums,
+                "checked_count": checked_count,
+                "existing": existing,
+                "errors": errors,
+                "no_upc": no_upc,
+                "missing_items": list(missing_items),
+                "selected_types": list(selected_types),
+                "scan_cancelled": cancelled,
+                "scan_complete": False,
+                "next_index": next_index,
+                "scan_catalog": catalog_snapshot,
+                "status": status or (
+                    f'Analysis of "{artist_name}" is in progress: '
+                    f"{next_index} of {total_albums} releases processed."
+                ),
+                "candidates": []
+            }
+            save_last_scan()
 
         add_scan_log("")
-
-        add_scan_log(
-            "Beginning UPC and MusicBrainz checks..."
-        )
-
+        add_scan_log("Beginning UPC and MusicBrainz checks...")
         add_scan_log("")
-
-        existing = 0
-        errors = 0
-        no_upc = 0
-        checked_count = 0
-
-        missing_items = []
 
         # ----------------------------------------------------
-        # Check for cancellation before each album.
+        # Check for cancellation before each release.
         # ----------------------------------------------------
         for index, album in enumerate(
-            albums,
-            start=1
+            albums[start_index:],
+            start=start_index + 1
         ):
 
             if is_scan_cancel_requested():
@@ -1469,27 +1530,16 @@ def perform_scan(
                     "============================================================"
                 )
 
-                current_data = {
-                    "artist_query": artist_query,
-                    "resolved_name": artist_name,
-                    "artist_id": artist_id,
-                    "albums_count": total_albums,
-                    "checked_count": checked_count,
-                    "existing": existing,
-                    "errors": errors,
-                    "no_upc": no_upc,
-                    "missing_items": missing_items,
-                    "selected_types": list(selected_types),
-                    "scan_cancelled": True,
-                    "status": (
-                        f'Analysis of "{artist_name}" was cancelled. '
-                        f"Partial results include {len(missing_items)} "
-                        f"confirmed missing release(s)."
-                    ),
-                    "candidates": []
-                }
-
-                save_last_scan()
+                save_progress(
+                    index - 1,
+                    cancelled=True,
+                    status=(
+                        f'Analysis of "{artist_name}" was cancelled before '
+                        f"release {index} of {total_albums}. "
+                        f"{index - 1} release(s) processed; "
+                        f"{len(missing_items)} confirmed missing."
+                    )
+                )
                 return
 
             album_id = album.get(
@@ -1530,6 +1580,10 @@ def perform_scan(
                 )
 
                 add_scan_log("")
+
+                # This release is fully processed even though it had no UPC.
+                # Persist the next index before continuing the loop.
+                save_progress(index, cancelled=False)
 
                 continue
 
@@ -1612,6 +1666,10 @@ def perform_scan(
 
             add_scan_log("")
 
+            # Persist only after the current release has a final result.
+            # If interrupted mid-request, the prior checkpoint causes a retry.
+            save_progress(index, cancelled=False)
+
         # A cancellation can arrive while the final release request is
         # in flight. Check again before reporting a complete scan.
         if is_scan_cancel_requested():
@@ -1628,26 +1686,15 @@ def perform_scan(
             add_scan_log("Partial results are being saved for display.")
             add_scan_log("============================================================")
 
-            current_data = {
-                "artist_query": artist_query,
-                "resolved_name": artist_name,
-                "artist_id": artist_id,
-                "albums_count": total_albums,
-                "checked_count": checked_count,
-                "existing": existing,
-                "errors": errors,
-                "no_upc": no_upc,
-                "missing_items": missing_items,
-                "selected_types": list(selected_types),
-                "scan_cancelled": True,
-                "status": (
-                    f'Analysis of "{artist_name}" was cancelled. '
-                    f"Partial results include {len(missing_items)} "
-                    f"confirmed missing release(s)."
-                ),
-                "candidates": []
-            }
-            save_last_scan()
+            save_progress(
+                total_albums,
+                cancelled=True,
+                status=(
+                    f'Analysis of "{artist_name}" was cancelled after '
+                    f"processing all {total_albums} releases. "
+                    f"{len(missing_items)} confirmed missing."
+                )
+            )
             return
 
         # Final summary
@@ -1708,6 +1755,7 @@ def perform_scan(
             "missing_items": missing_items,
             "selected_types": list(selected_types),
             "scan_cancelled": False,
+            "scan_complete": True,
             "status": (
                 f'Scan completed for "{artist_name}"! '
                 f"Discovered {len(missing_items)} "
