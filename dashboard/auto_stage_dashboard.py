@@ -1453,8 +1453,14 @@ def perform_scan(
                 )
 
                 add_scan_log(
-                    f"Stopped before album {index} "
+                    f"Stopped before release {index} "
                     f"of {total_albums}."
+                )
+                add_scan_log(
+                    f"Confirmed missing before cancellation: {len(missing_items)}"
+                )
+                add_scan_log(
+                    "Partial results are being saved for display."
                 )
 
                 add_scan_log(
@@ -1471,13 +1477,16 @@ def perform_scan(
                     "errors": errors,
                     "no_upc": no_upc,
                     "missing_items": missing_items,
+                    "scan_cancelled": True,
                     "status": (
-                        f'Analysis of "{artist_name}" '
-                        f"was cancelled."
+                        f'Analysis of "{artist_name}" was cancelled. '
+                        f"Partial results include {len(missing_items)} "
+                        f"confirmed missing release(s)."
                     ),
                     "candidates": []
                 }
 
+                save_last_scan()
                 return
 
             album_id = album.get(
@@ -1600,6 +1609,43 @@ def perform_scan(
 
             add_scan_log("")
 
+        # A cancellation can arrive while the final release request is
+        # in flight. Check again before reporting a complete scan.
+        if is_scan_cancel_requested():
+            add_scan_log("")
+            add_scan_log("============================================================")
+            add_scan_log("SCAN CANCELLED")
+            add_scan_log(
+                f"Stopped after processing release {total_albums} "
+                f"of {total_albums}."
+            )
+            add_scan_log(
+                f"Confirmed missing before cancellation: {len(missing_items)}"
+            )
+            add_scan_log("Partial results are being saved for display.")
+            add_scan_log("============================================================")
+
+            current_data = {
+                "artist_query": artist_query,
+                "resolved_name": artist_name,
+                "artist_id": artist_id,
+                "albums_count": total_albums,
+                "checked_count": checked_count,
+                "existing": existing,
+                "errors": errors,
+                "no_upc": no_upc,
+                "missing_items": missing_items,
+                "scan_cancelled": True,
+                "status": (
+                    f'Analysis of "{artist_name}" was cancelled. '
+                    f"Partial results include {len(missing_items)} "
+                    f"confirmed missing release(s)."
+                ),
+                "candidates": []
+            }
+            save_last_scan()
+            return
+
         # Final summary
         add_scan_log(
             "============================================================"
@@ -1656,6 +1702,7 @@ def perform_scan(
             "errors": errors,
             "no_upc": no_upc,
             "missing_items": missing_items,
+            "scan_cancelled": False,
             "status": (
                 f'Scan completed for "{artist_name}"! '
                 f"Discovered {len(missing_items)} "
@@ -2226,7 +2273,11 @@ HTML = """
             <div class="results-header">
 
                 <h2>
-                    Missing Releases
+                    {% if data.scan_cancelled %}
+                        Partial Results — Analysis Cancelled
+                    {% else %}
+                        Missing Releases
+                    {% endif %}
                 </h2>
 
                 <button
@@ -2242,6 +2293,12 @@ HTML = """
 
 
             <div class="summary">
+
+                {% if data.scan_cancelled %}
+                    <strong>Partial results:</strong> analysis was cancelled.
+                    Only releases confirmed missing before cancellation are listed.
+                    <br>
+                {% endif %}
 
                 Results for:
                 <strong>{{ data.resolved_name }}</strong>
