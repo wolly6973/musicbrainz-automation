@@ -400,8 +400,8 @@ LAST_SCAN_FILE = "/opt/mb-automation/last_scan.json"
 
 def save_last_scan():
     """
-    Persist the current completed scan so the dashboard can
-    restore it after the browser or dashboard is restarted.
+    Persist current scan results and the latest resume checkpoint so
+    progress survives a browser refresh or dashboard restart.
     """
 
     try:
@@ -437,7 +437,7 @@ def save_last_scan():
 
 def load_last_scan():
     """
-    Restore the most recent completed scan from disk.
+    Restore the latest scan results or resumable checkpoint from disk.
     """
 
     try:
@@ -3145,7 +3145,7 @@ def run_scan():
         if item in allowed_types
     ]
     if not selected_types:
-        selected_types = ["album", "single", "ep"]
+        selected_types = ["album", "ep", "single"]
 
     if resume_requested:
         if (
