@@ -1382,7 +1382,7 @@ def perform_scan(
 
     try:
         add_scan_log(
-            f'Starting scan for "{artist_name}" 
+            f'Starting scan for "{artist_name}" '
             f"(Deezer ID: {artist_id})"
         )
         type_labels = {"album": "Albums", "ep": "EPs", "single": "Singles"}
@@ -1762,6 +1762,7 @@ def perform_scan(
             "artist_id": artist_id,
             "albums_count": total_albums,
             "checked_count": checked_count,
+            "upc_match_count": upc_match_tracker["matches"],
             "existing": existing,
             "errors": errors,
             "no_upc": no_upc,
