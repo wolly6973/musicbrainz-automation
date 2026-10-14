@@ -2329,6 +2329,7 @@ HTML = """
                 <input type="hidden" name="artist_name" value="{{ data.resolved_name }}">
                 <input type="hidden" name="artist_query" value="{{ data.artist_query }}">
                 <input type="hidden" name="expected_releases" value="{{ data.albums_count }}">
+                <input type="hidden" name="resume_scan" value="1">
                 {% for release_type in data.selected_types or ['album', 'ep', 'single'] %}
                     <input type="hidden" name="scan_types" value="{{ release_type }}">
                 {% endfor %}
@@ -2667,7 +2668,10 @@ HTML = """
 
     function changeAnalysisScope() {
         const form = document.getElementById("restart-analysis-form");
-        if (form) openAnalyzeDialog(form, true);
+        if (form) {
+            form.querySelectorAll('input[name="resume_scan"]').forEach(input => input.remove());
+            openAnalyzeDialog(form, true);
+        }
     }
 
     function closeAnalyzeDialog() {
@@ -3133,6 +3137,9 @@ def run_scan():
         ""
     ).strip()
 
+    resume_requested = request.form.get("resume_scan") == "1"
+    resume_state = None
+
     allowed_types = {"album", "single", "ep"}
     selected_types = [
         item for item in request.form.getlist("scan_types")
@@ -3140,6 +3147,23 @@ def run_scan():
     ]
     if not selected_types:
         selected_types = ["album", "single", "ep"]
+
+    if resume_requested:
+        if (
+            current_data.get("scan_cancelled")
+            and isinstance(current_data.get("scan_catalog"), list)
+            and current_data.get("artist_id") == artist_id
+        ):
+            resume_state = dict(current_data)
+            selected_types = list(resume_state.get("selected_types", selected_types))
+            artist_name = resume_state.get("resolved_name", artist_name)
+            artist_query = resume_state.get("artist_query", artist_query)
+        else:
+            current_data["status"] = (
+                "Cannot resume: no saved analysis checkpoint is available. "
+                "Start a new analysis instead."
+            )
+            return redirect("/")
 
 
     if not artist_id:
@@ -3170,28 +3194,36 @@ def run_scan():
         expected_releases = None
 
 
-    # Reset the display immediately.
-
+    # Reset the display immediately for a fresh analysis. Resume requests
+    # retain the checkpoint and confirmed partial results.
     clear_scan_log()
     reset_scan_import_counter()
     reset_scan_cancel()
 
-    current_data = {
-        "artist_query": artist_query,
-        "resolved_name": artist_name,
-        "artist_id": artist_id,
-        "albums_count": 0,
-        "checked_count": 0,
-        "existing": 0,
-        "errors": 0,
-        "no_upc": 0,
-        "missing_items": [],
-        "status": (
-            f'Starting analysis of '
-            f'"{artist_name}"...'
-        ),
-        "candidates": []
-    }
+    if resume_state is None:
+        current_data = {
+            "artist_query": artist_query,
+            "resolved_name": artist_name,
+            "artist_id": artist_id,
+            "albums_count": 0,
+            "checked_count": 0,
+            "existing": 0,
+            "errors": 0,
+            "no_upc": 0,
+            "missing_items": [],
+            "selected_types": list(selected_types),
+            "scan_cancelled": False,
+            "scan_complete": False,
+            "status": (
+                f'Starting analysis of '
+                f'"{artist_name}"...'
+            ),
+            "candidates": []
+        }
+    else:
+        current_data["scan_cancelled"] = False
+        current_data["status"] = "Resuming saved analysis from its last checkpoint."
+        save_last_scan()
 
 
     # Start background scan.
@@ -3203,7 +3235,8 @@ def run_scan():
             artist_name,
             artist_query,
             expected_releases,
-            selected_types
+            selected_types,
+            resume_state
         ),
         daemon=True
     )
