@@ -1002,7 +1002,8 @@ def get_deezer_album(album_id):
 def check_musicbrainz_barcode(
     barcode,
     album_title=None,
-    artist_name=None
+    artist_name=None,
+    upc_match_tracker=None
 ):
     """
     Check MusicBrainz for an existing release.
@@ -1217,6 +1218,8 @@ def check_musicbrainz_barcode(
             return None
 
         if barcode_data.get("releases", []):
+            if upc_match_tracker is not None:
+                upc_match_tracker["matches"] += 1
             return True
 
     if not title_normalized or not artist_names:
@@ -1373,9 +1376,13 @@ def perform_scan(
     musicbrainz_scan_cache = {}
     musicbrainz_scan_stats = {"requests": 0, "cache_hits": 0}
 
+    upc_match_tracker = {
+        "matches": int((resume_state or {}).get("upc_match_count", 0) or 0)
+    }
+
     try:
         add_scan_log(
-            f'Starting scan for "{artist_name}" '
+            f'Starting scan for "{artist_name}" 
             f"(Deezer ID: {artist_id})"
         )
         type_labels = {"album": "Albums", "ep": "EPs", "single": "Singles"}
@@ -1474,6 +1481,7 @@ def perform_scan(
                 "artist_id": artist_id,
                 "albums_count": total_albums,
                 "checked_count": checked_count,
+                "upc_match_count": upc_match_tracker["matches"],
                 "existing": existing,
                 "errors": errors,
                 "no_upc": no_upc,
@@ -1601,7 +1609,8 @@ def perform_scan(
             mb_result = check_musicbrainz_barcode(
                 upc,
                 album_title=title,
-                artist_name=artist_name
+                artist_name=artist_name,
+                upc_match_tracker=upc_match_tracker
             )
 
             # Found
@@ -1711,7 +1720,11 @@ def perform_scan(
         )
 
         add_scan_log(
-            f"Albums checked by UPC: {checked_count}"
+            f"UPC lookups attempted: {checked_count}"
+        )
+
+        add_scan_log(
+            f"UPC matches on MusicBrainz: {upc_match_tracker['matches']}"
         )
 
         add_scan_log(
@@ -2580,54 +2593,50 @@ HTML = """
             " Imports...";
 
 
-        let index = 0;
+        // Open every tab synchronously during the button click so
+        // the browser is less likely to classify later tabs as pop-ups.
+        const openedWindows = [];
 
+        for (const release of releases) {
+            const newWindow = window.open("about:blank", "_blank");
 
-        function openNext() {
-
-            if (index >= releases.length) {
-
-                button.textContent =
-                    "All Imports Opened";
-
-                setTimeout(
-                    function() {
-                        window.location.reload();
-                    },
-                    1000
-                );
-
-                return;
+            if (!newWindow) {
+                break;
             }
 
-
-            const release =
-                releases[index];
-
-
-            const newWindow =
-                window.open(
-                    release.url,
-                    "_blank"
-                );
-
-            index++;
-
-            button.textContent =
-                "Opening " +
-                index +
-                " / " +
-                releases.length;
-
-
-            setTimeout(
-                openNext,
-                150
-            );
+            openedWindows.push({
+                window: newWindow,
+                url: release.url
+            });
         }
 
+        // Navigate the tabs only after attempting all synchronous opens.
+        openedWindows.forEach((entry) => {
+            try {
+                entry.window.location.href = entry.url;
+            } catch (error) {
+                console.error("Unable to navigate Auto-Stage tab:", error);
+            }
+        });
 
-        openNext();
+        button.textContent =
+            "Opened " + openedWindows.length + " / " + releases.length;
+
+        if (openedWindows.length < releases.length) {
+            alert(
+                "Opened " + openedWindows.length + " of " + releases.length +
+                " tabs. Your browser blocked the remaining tabs. Allow pop-ups for this dashboard and try again."
+            );
+            button.disabled = false;
+            button.textContent = "Auto-Stage All";
+            return;
+        }
+
+        button.textContent = "All Imports Opened";
+
+        setTimeout(function() {
+            window.location.reload();
+        }, 1000);
 
     }
 
